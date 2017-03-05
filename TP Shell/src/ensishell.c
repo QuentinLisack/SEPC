@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/wait.h>
 
 #include "variante.h"
 #include "readcmd.h"
@@ -118,6 +119,12 @@ int main() {
 		if (l->in) printf("in: %s\n", l->in);
 		if (l->out) printf("out: %s\n", l->out);
 		if (l->bg) printf("background (&)\n");
+		pid_t pid = fork();
+		if(pid == 0){
+			execvp(l->seq[0][0], l->seq[0]);
+		} else if(!l->bg) {
+			waitpid(pid, NULL, 0);
+		}
 
 		/* Display each command of the pipe */
 		for (i=0; l->seq[i]!=0; i++) {
@@ -128,6 +135,7 @@ int main() {
                         }
 			printf("\n");
 		}
+		
 	}
 
 }
