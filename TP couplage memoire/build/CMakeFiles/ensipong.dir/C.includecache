@@ -19,4 +19,12 @@ SDL/SDL.h
 -
 assert.h
 -
+sys/mman.h
+-
+sys/types.h
+-
+sys/stat.h
+-
+fcntl.h
+-
 
