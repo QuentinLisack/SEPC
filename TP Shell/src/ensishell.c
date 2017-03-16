@@ -9,7 +9,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/wait.h>
-
+#include <errno.h>
+#include <unistd.h>
+extern int execvpe(const char *file, char *const argv[], char *const envp[]);
 #include "variante.h"
 #include "readcmd.h"
 
@@ -59,6 +61,43 @@ void terminate(char *line) {
 	exit(0);
 }
 
+struct process{
+	pid_t pid;
+	char ** seq;
+	struct process* suiv;
+};
+struct process_list{
+	struct process* p;
+};
+
+void add_in_plist(struct process_list list, struct process proc){
+	proc.suiv=list.p;
+	list.p=&proc;
+}
+
+struct process* get_in_plist(struct process_list list, pid_t pid, int remove){
+	struct process* temp=(list.p);
+	if (temp==NULL){
+		return NULL;
+	}
+	if(temp->pid==pid){
+		if(remove){
+			list.p=temp->suiv;
+		}
+		return temp;
+	}
+	while(temp->suiv!=NULL){
+		if(temp->suiv->pid==pid){
+			if(remove){
+				temp->suiv=temp->suiv->suiv;
+			}
+			return temp->suiv;
+		}
+	}
+	return NULL;
+
+}
+
 
 int main() {
         printf("Variante %d: %s\n", VARIANTE, VARIANTE_STRING);
@@ -69,17 +108,19 @@ int main() {
         scm_c_define_gsubr("executer", 1, 0, 0, executer_wrapper);
 #endif
 
+    struct process_list plist={NULL};
+
 	while (1) {
 		struct cmdline *l;
-		char *line=0;
+		char *line = 0;
 		int i, j;
 		char *prompt = "ensishell>";
 
 		/* Readline use some internal memory structure that
-		   can not be cleaned at the end of the program. Thus
-		   one memory leak per command seems unavoidable yet */
+		 can not be cleaned at the end of the program. Thus
+		 one memory leak per command seems unavoidable yet */
 		line = readline(prompt);
-		if (line == 0 || ! strncmp(line,"exit", 4)) {
+		if (line == 0 || !strncmp(line, "exit", 4)) {
 			terminate(line);
 		}
 
@@ -87,55 +128,105 @@ int main() {
 		add_history(line);
 #endif
 
-
 #if USE_GUILE == 1
 		/* The line is a scheme command */
 		if (line[0] == '(') {
 			char catchligne[strlen(line) + 256];
-			sprintf(catchligne, "(catch #t (lambda () %s) (lambda (key . parameters) (display \"mauvaise expression/bug en scheme\n\")))", line);
+			sprintf(catchligne,
+					"(catch #t (lambda () %s) (lambda (key . parameters) (display \"mauvaise expression/bug en scheme\n\")))",
+					line);
 			scm_eval_string(scm_from_locale_string(catchligne));
 			free(line);
-                        continue;
-                }
+			continue;
+		}
 #endif
 
 		/* parsecmd free line and set it up to 0 */
-		l = parsecmd( & line);
+		l = parsecmd(&line);
 
 		/* If input stream closed, normal termination */
 		if (!l) {
-		  
+
 			terminate(0);
 		}
-		
 
-		
 		if (l->err) {
 			/* Syntax error, read another command */
 			printf("error: %s\n", l->err);
 			continue;
 		}
 
-		if (l->in) printf("in: %s\n", l->in);
-		if (l->out) printf("out: %s\n", l->out);
-		if (l->bg) printf("background (&)\n");
-		pid_t pid = fork();
-		if(pid == 0){
-			execvp(l->seq[0][0], l->seq[0]);
-		} else if(!l->bg) {
-			waitpid(pid, NULL, 0);
+		if (l->in)
+			printf("in: %s\n", l->in);
+		if (l->out)
+			printf("out: %s\n", l->out);
+		if (l->bg)
+			printf("background (&)\n");
+
+		if (l->seq[0] != NULL) {
+
+			if (strcmp(l->seq[0][0], "jobs") == 0) {
+				struct process* temp = plist.p;
+				while (temp != NULL) {
+					printf("%i\n", temp->pid);
+					temp = temp->suiv;
+				}
+			} else {
+				pid_t pid = fork();
+				if (pid == 0) {
+					extern char** environ;
+					if (execvpe(l->seq[0][0], l->seq[0], environ) == -1) {
+						//error handling
+						printf("error in: %s : error n %i \n", l->seq[0][0],
+								errno);
+						exit(-1);
+					}
+
+				} else if (!l->bg) {
+					waitpid(pid, NULL, 0);
+				} else { //running in background
+
+
+					struct process pr={pid,l->seq[0],NULL};
+					add_in_plist(plist, pr);
+
+
+					pid_t pid2 = fork();
+					if (pid2 == 0) {
+
+						waitpid(pid, NULL, 0);
+
+						pr = *get_in_plist(plist, pid, 1);
+						//do stuff
+						exit(0);
+					}
+				}
+			}
+
+			/* Display each command of the pipe */
+			for (i = 0; l->seq[i] != 0; i++) {
+				char **cmd = l->seq[i];
+				printf("seq[%d]: ", i);
+				for (j = 0; cmd[j] != 0; j++) {
+					printf("'%s' ", cmd[j]);
+				}
+				printf("\n");
+			}
+		}else{
+			int cpt=0;
+			struct process* temp = plist.p;
+			while (temp != NULL) {
+				cpt++;
+				temp=temp->suiv;
+			}
+			printf("%i\n",cpt);
 		}
 
-		/* Display each command of the pipe */
-		for (i=0; l->seq[i]!=0; i++) {
-			char **cmd = l->seq[i];
-			printf("seq[%d]: ", i);
-                        for (j=0; cmd[j]!=0; j++) {
-                                printf("'%s' ", cmd[j]);
-                        }
-			printf("\n");
+		pid_t waited_pid = waitpid(-1,NULL,WNOHANG);
+		if(waited_pid!=0){
+			get_in_plist(plist,waited_pid,1);
 		}
-		
+
 	}
 
 }
