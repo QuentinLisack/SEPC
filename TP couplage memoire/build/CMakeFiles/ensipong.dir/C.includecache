@@ -1,0 +1,30 @@
+#IncludeRegexLine: ^[ 	]*#[ 	]*(include|import)[ 	]*[<"]([^">]+)([">])
+
+#IncludeRegexScan: ^.*$
+
+#IncludeRegexComplain: ^$
+
+#IncludeRegexTransform: 
+
+/user/0/lisackq/Desktop/SEPC/TP couplage memoire/src/shmem_pong.c
+stdlib.h
+-
+unistd.h
+-
+stdint.h
+-
+sys/types.h
+-
+SDL/SDL.h
+-
+assert.h
+-
+sys/mman.h
+-
+sys/types.h
+-
+sys/stat.h
+-
+fcntl.h
+-
+

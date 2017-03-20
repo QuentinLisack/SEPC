@@ -1,0 +1,2 @@
+/user/0/lisackq/Desktop/SEPC/TP couplage memoire/build/CMakeFiles/check.dir
+/user/0/lisackq/Desktop/SEPC/TP couplage memoire/build/CMakeFiles/ensipong.dir
