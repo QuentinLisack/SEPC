@@ -14,6 +14,9 @@
 extern int execvpe(const char *file, char *const argv[], char *const envp[]);
 #include "variante.h"
 #include "readcmd.h"
+#include <assert.h>
+#include <signal.h>
+
 
 #ifndef VARIANTE
 #error "Variante non défini !!"
@@ -61,28 +64,31 @@ void terminate(char *line) {
 	exit(0);
 }
 
-struct process{
-	pid_t pid;
-	char ** seq;
-	struct process* suiv;
-};
-struct process_list{
-	struct process* p;
-};
+typedef struct timeval timeval_t;
 
-void add_in_plist(struct process_list list, struct process proc){
-	proc.suiv=list.p;
-	list.p=&proc;
+typedef struct process{
+	pid_t pid;
+	char * seq;
+	struct timeval *tv;
+	struct process* suiv;
+} process_t;
+typedef struct process_list{
+	struct process* p;
+} process_list_t;
+
+void add_in_plist(process_list_t *list, process_t *proc){
+	proc->suiv=list->p;
+	list->p=proc;
 }
 
-struct process* get_in_plist(struct process_list list, pid_t pid, int remove){
-	struct process* temp=(list.p);
+struct process* get_in_plist(process_list_t *list, pid_t pid, int remove){
+	struct process* temp=(list->p);
 	if (temp==NULL){
 		return NULL;
 	}
 	if(temp->pid==pid){
 		if(remove){
-			list.p=temp->suiv;
+			list->p=temp->suiv;
 		}
 		return temp;
 	}
@@ -99,6 +105,7 @@ struct process* get_in_plist(struct process_list list, pid_t pid, int remove){
 }
 
 
+
 int main() {
         printf("Variante %d: %s\n", VARIANTE, VARIANTE_STRING);
 
@@ -108,12 +115,18 @@ int main() {
         scm_c_define_gsubr("executer", 1, 0, 0, executer_wrapper);
 #endif
 
-    struct process_list plist={NULL};
+
+
+    process_list_t *plist=NULL;
+    plist=malloc(sizeof(process_list_t));
+    plist->p=NULL;
+    int nbpipe=0;
+
 
 	while (1) {
 		struct cmdline *l;
 		char *line = 0;
-		int i, j;
+		//int i;
 		char *prompt = "ensishell>";
 
 		/* Readline use some internal memory structure that
@@ -163,68 +176,194 @@ int main() {
 		if (l->bg)
 			printf("background (&)\n");
 
-		if (l->seq[0] != NULL) {
+		nbpipe = 0;
+		while (l->seq[nbpipe] != NULL) {
+			nbpipe++;
+		}
 
-			if (strcmp(l->seq[0][0], "jobs") == 0) {
-				struct process* temp = plist.p;
-				while (temp != NULL) {
-					printf("%i\n", temp->pid);
-					temp = temp->suiv;
-				}
-			} else {
+		if (nbpipe <2) {
+
+			if (l->seq[0] != NULL) {
+
 				pid_t pid = fork();
 				if (pid == 0) {
-					extern char** environ;
-					if (execvpe(l->seq[0][0], l->seq[0], environ) == -1) {
-						//error handling
-						printf("error in: %s : error n %i \n", l->seq[0][0],
-								errno);
-						exit(-1);
+
+					if (strcmp(l->seq[0][0], "jobs") == 0) {
+						process_t *lp = plist->p;
+						char* fb[5];
+						fb[0] = malloc(5 * sizeof(char));
+						fb[0] = "echo";
+						fb[1] = malloc(11 * sizeof(char));
+						fb[1] = "\nRUNNING:\t";
+						fb[3] = malloc(2 * sizeof(char));
+						fb[3] = "\n";
+						fb[4] = NULL;
+
+						while (lp != NULL) {
+							if (fork() == 0) {
+
+								fb[2] = lp->seq;
+								execvp(fb[0], fb);
+
+							}
+
+							lp = lp->suiv;
+						}
+						exit(0);
+
+					} else {
+						extern char** environ;
+						if (execvpe(l->seq[0][0], l->seq[0], environ) == -1) {
+							//error handling
+							printf("error in: %s : error n %i \n", l->seq[0][0],
+							errno);
+							exit(-1);
+						}
 					}
 
 				} else if (!l->bg) {
 					waitpid(pid, NULL, 0);
 				} else { //running in background
 
+					process_t *pr = NULL;
+					pr = malloc(sizeof(process_t));
+					pr->pid = pid;
+					pr->seq = malloc(sizeof(char) * strlen(l->seq[0][0]) + 1);
+					pr->tv = malloc(sizeof(timeval_t));
+					gettimeofday(pr->tv, NULL);
+					assert(pr->tv!=NULL);
+					strcpy(pr->seq, l->seq[0][0]);
+					pr->suiv = NULL;
 
-					struct process pr={pid,l->seq[0],NULL};
 					add_in_plist(plist, pr);
 
+				}
 
-					pid_t pid2 = fork();
-					if (pid2 == 0) {
+			}
+		} else {
 
-						waitpid(pid, NULL, 0);
+			int tuyau[2];
+			pid_t pid;
+			int n_inp = 0;
+			int i = 0;
 
-						pr = *get_in_plist(plist, pid, 1);
-						//do stuff
-						exit(0);
+			while (l->seq[i] != NULL) {
+				pipe(tuyau);
+				pid = fork();
+				if (pid == 0) {
+
+					dup2(n_inp, 0);
+					if (l->seq[i + 1] != NULL) {
+						dup2(tuyau[1], 1);
 					}
-				}
-			}
+					close(tuyau[0]);
 
-			/* Display each command of the pipe */
-			for (i = 0; l->seq[i] != 0; i++) {
-				char **cmd = l->seq[i];
-				printf("seq[%d]: ", i);
-				for (j = 0; cmd[j] != 0; j++) {
-					printf("'%s' ", cmd[j]);
+					if (strcmp(l->seq[0][0], "jobs") == 0) {
+						process_t *lp = plist->p;
+						char* fb[5];
+						fb[0] = malloc(5 * sizeof(char));
+						fb[0] = "echo";
+						fb[1] = malloc(11 * sizeof(char));
+						fb[1] = "\nRUNNING:\t";
+						fb[3] = malloc(2 * sizeof(char));
+						fb[3] = "\n";
+						fb[4] = NULL;
+
+						while (lp != NULL) {
+							if (fork() == 0) {
+
+								fb[2] = lp->seq;
+								execvp(fb[0], fb);
+
+							}
+
+							lp = lp->suiv;
+						}
+
+						exit(0);
+
+					} else {
+
+						if (execvp(l->seq[i][0], l->seq[i]) == -1) {
+							//error handling
+							printf("error in: %s : error n %i \n", l->seq[0][0],
+							errno);
+							exit(-1);
+						}
+					}
+
+				} else {
+					waitpid(pid, NULL, 0);
+					close(tuyau[1]);
+					n_inp = tuyau[0];
+					i++;
 				}
-				printf("\n");
 			}
-		}else{
-			int cpt=0;
-			struct process* temp = plist.p;
-			while (temp != NULL) {
-				cpt++;
-				temp=temp->suiv;
-			}
-			printf("%i\n",cpt);
 		}
 
-		pid_t waited_pid = waitpid(-1,NULL,WNOHANG);
-		if(waited_pid!=0){
-			get_in_plist(plist,waited_pid,1);
+
+
+
+
+
+
+
+
+			/*
+			 for (int i = 0; i < nbpipe - 1; i++) {
+			 if (fork() == 0) {
+			 //
+			 dup2(tuyau[i]);
+			 close(tuyau[1]);
+			 close(tuyau[0]);
+			 //redirection?
+			 extern char** environ;
+			 if (execvpe(l->seq[i][0], l->seq[i], environ) == -1) {
+			 //error handling
+			 printf("error in: %s : error n %i \n", l->seq[0][0],
+			 errno);
+			 exit(-1);
+			 }
+			 }
+			 pid_t pid=fork();
+			 if(pid_t==0){
+			 dup2(tuyau[i][1],)
+
+			 }else if (!l->bg) {
+			 waitpid(pid, NULL, 0);
+			 } else { //running in background
+
+			 process_t *pr = NULL;
+			 pr = malloc(sizeof(process_t));
+			 pr->pid = pid;
+			 pr->seq = malloc(sizeof(char) * strlen(l->seq[0][0]) + 1);
+			 pr->tv = malloc(sizeof(timeval_t));
+			 gettimeofday(pr->tv, NULL);
+			 assert(pr->tv!=NULL);
+			 strcpy(pr->seq, l->seq[0][0]);
+			 pr->suiv = NULL;
+
+			 add_in_plist(plist, pr);
+
+			 }
+			 }
+			 */
+
+		pid_t waited_pid = waitpid(WAIT_ANY,NULL,WUNTRACED|WNOHANG);
+		if(waited_pid>0){
+			process_t *pr2=get_in_plist(plist,waited_pid,1);
+			if(pr2!=NULL){
+/*
+				struct timeval *tv2=malloc(sizeof(timeval_t));
+				gettimeofday(tv2, NULL);
+
+
+				printf("\n Temps de calcul:\t %i secondes %i millisecondes \n",(int)(tv2->tv_sec-pr2->tv->tv_sec),(int)(tv2->tv_usec-pr2->tv->tv_usec));
+				free(tv2);*/
+				free(pr2->tv);
+				free(pr2->seq);
+				free(pr2);
+			}
 		}
 
 	}

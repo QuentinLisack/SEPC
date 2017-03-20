@@ -1,0 +1,11 @@
+basic:done
+attente:done
+tache de fond:done
+jobs:done
+pipe simple: done*
+redirection:
+tps de calc:
+pipes multiples:done *
+
+
+* fucking jobs compatibility
